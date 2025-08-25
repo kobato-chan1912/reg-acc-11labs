@@ -1,9 +1,9 @@
 const puppeteer = require('puppeteer');
 const axios = require('axios');
-const pLimit = require('p-limit@3'); // Giữ nguyên phiên bản 3
+const pLimit = require('p-limit'); // Giữ nguyên phiên bản 3
 const readline = require('readline');
 require('dotenv').config();
-
+const {faker} = require('@faker-js/faker');
 // --- Lấy cấu hình từ file .env ---
 const {
     PROXY_API_URL,
@@ -16,10 +16,41 @@ const {
 
 const DEFAULT_TIMEOUT = 5 * 60 * 1000; // 5 phút
 
+
+
+
+
 // --- Hàm tiện ích ---
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 const randomDelay = (min, max) => Math.floor(Math.random() * (max - min + 1) + min) * 1000;
 const log = (threadId, message) => console.log(`[Tác vụ ${threadId}] ${message}`);
+async function humanLikeClick(page, selector) {
+    // Đợi element hiển thị tối đa 5 phút
+    const btn = await page.waitForSelector(selector, { visible: true, timeout: 300000 });
+    const box = await btn.boundingBox();
+
+    if (!box) {
+        throw new Error(`Không tìm thấy boundingBox cho selector: ${selector}`);
+    }
+
+    const x = box.x + box.width / 2;
+    const y = box.y + box.height / 2;
+
+    // Scroll element vào giữa viewport
+    await btn.evaluate(el => el.scrollIntoView({ behavior: 'instant', block: 'center', inline: 'center' }));
+
+    // Di chuột tới vị trí của button với nhiều bước (cho mượt)
+    await page.mouse.move(x, y, { steps: 20 });
+
+    // Hover 100–300ms giống người dùng dừng lại trước khi click
+    await sleep(100 + Math.random() * 200);
+
+    // Giả lập click: mouse down → giữ 30–80ms → mouse up
+    await page.mouse.down();
+    await sleep(30 + Math.random() * 50);
+    await page.mouse.up();
+}
+
 
 // Hàm chính xử lý một luồng tự động
 // Trả về true nếu thành công, false nếu thất bại
@@ -38,7 +69,7 @@ async function runAutomationProcess(taskId) {
         log(taskId, 'Đang tạo profile GPM...');
         const createProfileResponse = await axios.post(`${GPM_API_URL}/profiles/create`, {
             raw_proxy: proxy,
-            name: `11Labs_Reg_${Date.now()}`
+            profile_name: `11Labs_Reg_${Date.now()}`
         });
 
         if (!createProfileResponse.data.success) {
@@ -57,7 +88,7 @@ async function runAutomationProcess(taskId) {
         const { remote_debugging_address } = startResponse.data.data;
         await sleep(5000); // Chờ GPM khởi động hoàn tất
         browser = await puppeteer.connect({
-            browserWSEndpoint: `ws://${remote_debugging_address}`,
+            browserURL: `http://${remote_debugging_address}`,
             defaultViewport: null,
         });
 
@@ -80,13 +111,15 @@ async function runAutomationProcess(taskId) {
         await page.goto('https://accounts.google.com', { waitUntil: 'networkidle2' });
 
         await page.waitForSelector('#identifierId');
+        await sleep(3000)
         await page.type('#identifierId', email, { delay: 100 });
         await page.keyboard.press('Enter');
 
         await page.waitForSelector('input[type="password"]', { visible: true });
+        await sleep(2000);
         await page.type('input[type="password"]', password, { delay: 100 });
         await page.keyboard.press('Enter');
-        
+
         try {
             log(taskId, "Chờ nút 'Confirm' trong 15 giây...");
             await page.waitForSelector('#confirm', { timeout: 15000 });
@@ -105,7 +138,7 @@ async function runAutomationProcess(taskId) {
         } catch (error) {
             log(taskId, "Không tìm thấy liên kết tùy chọn, tiếp tục.");
         }
-        
+
         await page.waitForSelector('.YPzqGd', { visible: true });
         log(taskId, 'Đăng nhập Google thành công.');
         await sleep(3000);
@@ -120,24 +153,34 @@ async function runAutomationProcess(taskId) {
         const googleSignInButtonSelector = "#app-root div:nth-child(1) > button";
         await page.waitForSelector(googleSignInButtonSelector);
 
+
         const [popup] = await Promise.all([
             new Promise(resolve => browser.once('targetcreated', target => resolve(target.page()))),
-            page.click(googleSignInButtonSelector)
+            // page.click(googleSignInButtonSelector)
+            humanLikeClick(page, googleSignInButtonSelector)
         ]);
-        if (popup) await popup.waitForLoadState('networkidle');
+        if (popup) await popup.waitForNavigation({ waitUntil: 'networkidle0' });
+        await sleep(5000)
         log(taskId, 'Cửa sổ đăng nhập Google đã hiện ra.');
+        await popup.setViewport({ width: 1280, height: 800 });
+
 
         const firstAccountSelector = 'li.aZvCDf.oqdnae';
         await popup.waitForSelector(firstAccountSelector, { visible: true });
-        await popup.click(firstAccountSelector);
+        await sleep(2000);
+        // await popup.click(firstAccountSelector);
+        await humanLikeClick(popup, firstAccountSelector)
         log(taskId, 'Đã chọn tài khoản Google.');
 
-        const continueButtonSelector = 'button > div.VfPpkd-RLmnJb';
+        const continueButtonSelector = '#yDmH0d > c-wiz > main > div.JYXaTc.F8PBrb > div > div > div:nth-child(2) > div > div > button';
         await popup.waitForSelector(continueButtonSelector, { visible: true });
-        await popup.click(continueButtonSelector);
+        await sleep(5000);
+        // await popup.click(continueButtonSelector);
+        await humanLikeClick(popup, continueButtonSelector)
         log(taskId, 'Đã nhấn Tiếp tục.');
 
-        log(taskId, 'Chờ chuyển hướng về trang Onboarding (30-40s)...');
+
+        log(taskId, 'Chờ chuyển hướng về trang Onboarding...');
         await page.waitForFunction(
             'window.location.href.includes("elevenlabs.io/app/onboarding")', { timeout: 60000 }
         );
@@ -146,13 +189,16 @@ async function runAutomationProcess(taskId) {
         // --- 6. Thiết lập tài khoản ---
         log(taskId, 'Bắt đầu thiết lập tài khoản...');
         await page.goto('https://elevenlabs.io/app/onboarding', { waitUntil: 'networkidle2' });
+        await sleep(5000)
 
-        const nextButton1 = "button";
+        const nextButton1 = "#app-root > div.grow.h-full.w-full.flex.flex-col.justify-center.items-center.inter > div > div.h-full.w-full.flex.flex-col.justify-center.items-center > div > div > div > button";
         await page.waitForSelector(nextButton1); await page.click(nextButton1);
 
         log(taskId, 'Điền thông tin cá nhân...');
         await page.waitForSelector('#firstname');
-        await page.type('#firstname', 'John');
+        await sleep(2000);
+        let fullName = `${faker.person.firstName()} ${faker.person.lastName()}`;
+        await page.type('#firstname', fullName);
         await page.type('#bday-day', String(Math.floor(Math.random() * 27) + 1));
         await page.type('#bday-year', String(Math.floor(Math.random() * (1992 - 1980 + 1)) + 1980));
         await page.select('select[autocomplete="bday-month"]', String(Math.floor(Math.random() * 12)));
@@ -161,44 +207,57 @@ async function runAutomationProcess(taskId) {
         await sleep(5000);
 
         const genericNextButton = "div > button";
-        await page.waitForSelector(genericNextButton); await page.click(genericNextButton);
+        const skip1Btn = "#app-root > div.grow.h-full.w-full.flex.flex-col.justify-center.items-center.inter > div > div.h-full.w-full.flex.flex-col.justify-center.items-center > div > div:nth-child(3) > div > div > button"
+        await page.waitForSelector(skip1Btn); await page.click(skip1Btn);
         await sleep(5000);
-        await page.waitForSelector(genericNextButton); await page.click(genericNextButton);
+
+        const ctnBtn = "#app-root > div.grow.h-full.w-full.flex.flex-col.justify-center.items-center.inter > div > div.h-full.w-full.flex.flex-col.justify-center.items-center > div > div > div > button"
+        await page.waitForSelector(ctnBtn); await page.click(ctnBtn);
         await sleep(5000);
-        await page.waitForSelector(genericNextButton); await page.click(genericNextButton);
+
+
+        const skip2Btn = "#app-root > div.grow.h-full.w-full.flex.flex-col.justify-center.items-center.inter > div > div.h-full.w-full.flex.flex-col.justify-center.items-center > div > div:nth-child(3) > div > div > button"
+        await page.waitForSelector(skip2Btn); await page.click(skip2Btn);
         await sleep(5000);
-        await page.waitForSelector(genericNextButton); await page.click(genericNextButton);
+
+        const skip3Btn = "#app-root > div.grow.h-full.w-full.flex.flex-col.justify-center.items-center.inter > div > div.h-full.w-full.flex.flex-col.justify-center.items-center > div > div:nth-child(3) > div > div > div > div > button"
+        await page.waitForSelector(skip3Btn); await page.click(skip3Btn);
         await sleep(5000);
-        
+
         const finishOnboardingBtn = "div.hstack > button:nth-child(1)";
         await page.waitForSelector(finishOnboardingBtn); await page.click(finishOnboardingBtn);
 
         await page.waitForSelector('textarea');
-        log(taskId, 'Thiết lập tài khoản hoàn tất. Chờ 10 giây...');
+        log(taskId, 'Thiết lập tài khoản hoàn tất. Chờ ...');
         await sleep(10000);
 
         // --- 7. Lấy API Key ---
         log(taskId, 'Bắt đầu lấy API Key...');
         await page.goto('https://elevenlabs.io/app/developers/api-keys', { waitUntil: 'networkidle2' });
 
-        const addKeyButton = "main > section > button";
-        await page.waitForSelector(addKeyButton); await page.click(addKeyButton);
-
-        await page.waitForSelector('input[id^="restrict-key-toggle-"]');
-        await page.click('input[id^="restrict-key-toggle-"]');
-
+        await sleep(2000)
         const createButtons = await page.$$('button[data-loading=false]');
+        await createButtons[0].click();
+
+        await page.waitForSelector("div[role=dialog] button.peer");
+        await sleep(2000);
+        await page.click("div[role=dialog] button.peer");
+
+
         await createButtons[createButtons.length - 1].click();
 
-        const apiKeyInputSelector = 'input[id^="radix-"][type="text"]';
+        const apiKeyInputSelector = "div[role=dialog] input";
         await page.waitForSelector(apiKeyInputSelector);
         const apiKey = await page.$eval(apiKeyInputSelector, el => el.value);
 
         if (!apiKey) throw new Error('Không thể lấy được API Key.');
-        
+
         log(taskId, `Lấy API Key thành công: ${apiKey.substring(0, 8)}...`);
-        await axios.get(`${SAVE_KEY_API_URL}?api_key=${apiKey}`);
-        log(taskId, 'Đã lưu API Key.');
+        await axios.post(SAVE_KEY_API_URL, {
+            api_key: apiKey,
+        });
+
+        log(taskId, 'Đã lưu API Key: ' + apiKey);
 
         log(taskId, 'HOÀN THÀNH TÁC VỤ THÀNH CÔNG!');
         return true; // Trả về true khi thành công
@@ -255,9 +314,9 @@ async function main() {
     const limit = pLimit(numThreads);
     let successfulRegs = 0;
     let attemptCount = 0;
-    
+
     // Tạo một mảng "công việc". Mỗi công việc sẽ chạy cho đến khi đăng ký thành công 1 tài khoản.
-    const jobPromises = Array.from({ length: totalAccounts }).map(() => 
+    const jobPromises = Array.from({ length: totalAccounts }).map(() =>
         limit(async function registerAttempt() {
             attemptCount++;
             const currentAttemptId = attemptCount;
@@ -273,7 +332,7 @@ async function main() {
             }
         })
     );
-    
+
     // Chờ tất cả các công việc hoàn thành
     await Promise.all(jobPromises);
 
