@@ -62,7 +62,7 @@ async function runAutomationProcess(taskId) {
     try {
         // --- 2. Lấy dữ liệu và tạo profile GPM ---
         log(taskId, 'Đang lấy Proxy...');
-        const proxyResponse = await axios.get(PROXY_API_URL);
+        const proxyResponse = await axios.get("https://11labs.toolsetting.cfd/proxy.php");
         const proxy = proxyResponse.data.trim();
         log(taskId, `Đã lấy Proxy: ${proxy.split('@')[0]}...`);
 
