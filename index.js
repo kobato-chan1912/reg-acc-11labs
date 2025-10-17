@@ -4,6 +4,7 @@ const pLimit = require('p-limit'); // Giữ nguyên phiên bản 3
 const readline = require('readline');
 require('dotenv').config();
 const {faker} = require('@faker-js/faker');
+const { timeout } = require('puppeteer-core');
 // --- Lấy cấu hình từ file .env ---
 const {
     PROXY_API_URL,
@@ -159,7 +160,7 @@ async function runAutomationProcess(taskId) {
             // page.click(googleSignInButtonSelector)
             humanLikeClick(page, googleSignInButtonSelector)
         ]);
-        if (popup) await popup.waitForNavigation({ waitUntil: 'networkidle0' });
+        if (popup) await popup.waitForNavigation({ waitUntil: 'networkidle0', timeout: 300000 });
         await sleep(5000)
         log(taskId, 'Cửa sổ đăng nhập Google đã hiện ra.');
         await popup.setViewport({ width: 1280, height: 800 });
@@ -203,26 +204,36 @@ async function runAutomationProcess(taskId) {
         await page.type('#bday-year', String(Math.floor(Math.random() * (1992 - 1980 + 1)) + 1980));
         await page.select('select[autocomplete="bday-month"]', String(Math.floor(Math.random() * 12)));
 
-        await page.waitForSelector('form > button'); await page.click('form > button');
+        await page.waitForSelector('form > div.hstack.gap-2.items-center > button'); await page.click('form > div.hstack.gap-2.items-center > button');
         await sleep(5000);
 
         const genericNextButton = "div > button";
-        const skip1Btn = "#app-root > div.grow.h-full.w-full.flex.flex-col.justify-center.items-center.inter > div > div.h-full.w-full.flex.flex-col.justify-center.items-center > div > div:nth-child(3) > div > div > button"
+        const skip1Btn = "#app-root > div.grow.h-full.w-full.flex.flex-col.justify-center.items-center.inter > div > div.h-full.w-full.flex.flex-col.justify-center.items-center > div > div:nth-child(3) > div > div > div:nth-child(2) > button"
         await page.waitForSelector(skip1Btn); await page.click(skip1Btn);
         await sleep(5000);
 
-        const ctnBtn = "#app-root > div.grow.h-full.w-full.flex.flex-col.justify-center.items-center.inter > div > div.h-full.w-full.flex.flex-col.justify-center.items-center > div > div > div > button"
+        // chia 2 man hinh
+
+        const ctnBtn = "#app-root > div.grow.h-full.w-full.flex.flex-col.justify-center.items-center.inter > div > div.h-full.w-full.flex.flex-col.justify-center.items-center > div > div > div > div.hstack.gap-2.items-center > button"
         await page.waitForSelector(ctnBtn); await page.click(ctnBtn);
         await sleep(5000);
 
 
-        const skip2Btn = "#app-root > div.grow.h-full.w-full.flex.flex-col.justify-center.items-center.inter > div > div.h-full.w-full.flex.flex-col.justify-center.items-center > div > div:nth-child(3) > div > div > button"
+
+
+        const skip2Btn = "#app-root > div.grow.h-full.w-full.flex.flex-col.justify-center.items-center.inter > div > div.h-full.w-full.flex.flex-col.justify-center.items-center > div > div:nth-child(3) > div > div > div:nth-child(2) > button"
         await page.waitForSelector(skip2Btn); await page.click(skip2Btn);
         await sleep(5000);
 
-        const skip3Btn = "#app-root > div.grow.h-full.w-full.flex.flex-col.justify-center.items-center.inter > div > div.h-full.w-full.flex.flex-col.justify-center.items-center > div > div:nth-child(3) > div > div > div > div > button"
+        // What would you like to do with ElevenLabs?
+
+
+        const skip3Btn = "#app-root > div.grow.h-full.w-full.flex.flex-col.justify-center.items-center.inter > div > div.h-full.w-full.flex.flex-col.justify-center.items-center > div > div:nth-child(3) > div > div > div > div.hstack.gap-2.items-center > button"
         await page.waitForSelector(skip3Btn); await page.click(skip3Btn);
         await sleep(5000);
+
+        // Do more with ElevenLabs
+
 
         const finishOnboardingBtn = "div.hstack > button:nth-child(1)";
         await page.waitForSelector(finishOnboardingBtn); await page.click(finishOnboardingBtn);
