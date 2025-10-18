@@ -3,7 +3,7 @@ const axios = require('axios');
 const pLimit = require('p-limit'); // Giữ nguyên phiên bản 3
 const readline = require('readline');
 require('dotenv').config();
-const {faker} = require('@faker-js/faker');
+const { faker } = require('@faker-js/faker');
 const { timeout } = require('puppeteer-core');
 // --- Lấy cấu hình từ file .env ---
 const {
@@ -52,6 +52,17 @@ async function humanLikeClick(page, selector) {
     await page.mouse.up();
 }
 
+function randomWindowPosition() {
+    // Giả sử màn hình 1920x1080, trừ đi vùng để không mở ngoài mép
+    const maxX = 1280 - 400;
+    const maxY = 720 - 300;
+
+    const x = Math.floor(Math.random() * maxX);
+    const y = Math.floor(Math.random() * maxY);
+
+    return `${x},${y}`;
+}
+
 
 // Hàm chính xử lý một luồng tự động
 // Trả về true nếu thành công, false nếu thất bại
@@ -81,7 +92,8 @@ async function runAutomationProcess(taskId) {
 
         // --- 3. Kết nối với profile GPM ---
         log(taskId, 'Đang khởi động profile và kết nối Puppeteer...');
-        const startResponse = await axios.get(`${GPM_API_URL}/profiles/start/${profileId}`);
+        const win_pos = randomWindowPosition();
+        const startResponse = await axios.get(`${GPM_API_URL}/profiles/start/${profileId}?win_pos=${win_pos}`);
         if (!startResponse.data.success) {
             throw new Error(`Không thể mở profile: ${startResponse.data.message}`);
         }
@@ -106,7 +118,9 @@ async function runAutomationProcess(taskId) {
         if (gmailResponse.data.status !== 'success' || !gmailResponse.data.data.lists[0]) {
             throw new Error('Lấy tài khoản Gmail thất bại.');
         }
-        const [email, password] = gmailResponse.data.data.lists[0].account.split('|');
+        const [rawEmail, password] = gmailResponse.data.data.lists[0].account.split('|');
+        const email = rawEmail.toLowerCase();
+
         log(taskId, `Đã lấy Gmail: ${email}`);
 
         await page.goto('https://accounts.google.com', { waitUntil: 'networkidle2' });
@@ -166,7 +180,8 @@ async function runAutomationProcess(taskId) {
         await popup.setViewport({ width: 1280, height: 800 });
 
 
-        const firstAccountSelector = 'li.aZvCDf.oqdnae';
+        const firstAccountSelector = `div[data-identifier="${email}"]`;
+
         await popup.waitForSelector(firstAccountSelector, { visible: true });
         await sleep(2000);
         // await popup.click(firstAccountSelector);
@@ -254,10 +269,13 @@ async function runAutomationProcess(taskId) {
         await sleep(2000);
         await page.click("div[role=dialog] button.peer");
 
+        await sleep(5000)
 
-        await createButtons[createButtons.length - 1].click();
+        const reloadCreateButtons = await page.$$('button[data-loading=false]');
+        await reloadCreateButtons[reloadCreateButtons.length - 1].click();
 
         const apiKeyInputSelector = "div[role=dialog] input";
+        await sleep(3000)
         await page.waitForSelector(apiKeyInputSelector);
         const apiKey = await page.$eval(apiKeyInputSelector, el => el.value);
 
@@ -286,7 +304,7 @@ async function runAutomationProcess(taskId) {
                 log(taskId, 'Đang đóng và xóa profile...');
                 await axios.get(`${GPM_API_URL}/profiles/close/${profileId}`);
                 await sleep(2000);
-                await axios.delete(`${GPM_API_URL}/profiles/delete/${profileId}`);
+                await axios.delete(`${GPM_API_URL}/profiles/delete/${profileId}?mode=2`);
                 log(taskId, 'Dọn dẹp profile thành công.');
             } catch (cleanupError) {
                 console.error(`[Tác vụ ${taskId}] Lỗi khi dọn dẹp profile: ${cleanupError.message}`);
