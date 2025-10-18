@@ -5,6 +5,57 @@ const pLimit = require('p-limit'); // Giữ nguyên phiên bản 3
 const readline = require('readline');
 require('dotenv').config();
 const { faker } = require('@faker-js/faker');
+const { TempMail } = require('tempmail.lol');
+
+function generateStrongPassword(length = 12) {
+  const upper = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  const lower = "abcdefghijklmnopqrstuvwxyz";
+  const numbers = "0123456789";
+  const specials = "!@#$%^&*";
+  const all = upper + lower + numbers + specials;
+
+  let password = "";
+  password += upper[Math.floor(Math.random() * upper.length)];
+  password += lower[Math.floor(Math.random() * lower.length)];
+  password += numbers[Math.floor(Math.random() * numbers.length)];
+  password += specials[Math.floor(Math.random() * specials.length)];
+
+  // Điền phần còn lại ngẫu nhiên
+  for (let i = password.length; i < length; i++) {
+    password += all[Math.floor(Math.random() * all.length)];
+  }
+
+  // Trộn ngẫu nhiên
+  return password.split('').sort(() => Math.random() - 0.5).join('');
+}
+
+
+async function createTempMail() {
+    const tm = new TempMail();
+    const inbox = await tm.createInbox();
+    return { address: inbox.address, token: inbox.token, tm };
+}
+
+async function waitForVerifyLink(token, tm, timeoutMs = 120000) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+        const emails = await tm.checkInbox(token);
+        if (emails && emails.length > 0) {
+            for (const mail of emails) {
+                if (mail.subject && mail.subject.includes("Verify your email for ElevenLabs")) {
+                    const body = mail.html || mail.body || "";
+                    const match = body.match(/https:\/\/elevenlabs\.io\/app\/action\?mode=verifyEmail[^\s'"]+/);
+                    if (match) {
+                        return match[0];
+                    }
+                }
+            }
+        }
+        await sleep(3000);
+    }
+    throw new Error('Không nhận được mail verify trong thời gian chờ.');
+}
+
 
 const {
     PROXY_API_URL,
@@ -52,7 +103,7 @@ function getFixedWindowPosition(threadId) {
     // Mỗi cửa sổ có kích thước tương đối cố định (ví dụ 400x300)
     // Giả định màn hình khoảng 1920x1080 — bạn có thể chỉnh cho phù hợp
     const positions = [
-        "0,0",       // Luồng 1: góc trên bên trái
+        "200,400",       // Luồng 1: góc trên bên trái
         "500,0",     // Luồng 2: bên phải 1 chút
         "1000,0",    // Luồng 3: trên bên phải
         "0,400",     // Luồng 4: hàng dưới
@@ -111,7 +162,7 @@ async function runAutomationProcess(taskId, proxyObj) {
             } catch (err) {
                 log(taskId, `WARNING: Gọi đổi IP thất bại: ${err.message}`);
                 // Không dừng ngay — tùy bạn muốn strict thì throw ở đây
-            
+
             }
         } else {
             log(taskId, 'Không có apiKey để gọi đổi IP — bỏ qua bước đổi IP.');
@@ -155,84 +206,41 @@ async function runAutomationProcess(taskId, proxyObj) {
         log(taskId, 'Kết nối Puppeteer thành công.');
 
         // --- Các bước đăng nhập Google / register ElevenLabs giống cũ ---
-        // --- 4. Đăng nhập Google ---
-        log(taskId, 'Bắt đầu quá trình đăng nhập Google...');
-        log(taskId, 'Đang lấy tài khoản Gmail...');
-        const gmailApiUrl = `https://mail3979.com/api/BResource.php?username=${GMAIL_API_USERNAME}&password=${GMAIL_API_PASSWORD}&id=${GMAIL_API_ID}&amount=1`;
-        const gmailResponse = await axios.get(gmailApiUrl, { timeout: 20000 });
-        if (gmailResponse.data.status !== 'success' || !gmailResponse.data.data.lists[0]) {
-            throw new Error('Lấy tài khoản Gmail thất bại.');
-        }
-        const [rawEmail, password] = gmailResponse.data.data.lists[0].account.split('|');
-        const email = rawEmail.toLowerCase();
+        // --- 4. Đăng nhập Email ---
 
-        log(taskId, `Đã lấy Gmail: ${email}`);
+        const { address: email, token, tm } = await createTempMail();
+        const password = generateStrongPassword(12);
 
-        await page.goto('https://accounts.google.com', { waitUntil: 'networkidle2' });
+        log(taskId, `Mail: ${email}`);
+        log(taskId, `Password: ${password}`);
 
-        await page.waitForSelector('#identifierId');
-        await sleep(3000)
-        await page.type('#identifierId', email, { delay: 100 });
-        await page.keyboard.press('Enter');
-
-        await page.waitForSelector('input[type="password"]', { visible: true });
-        await sleep(2000);
-        await page.type('input[type="password"]', password, { delay: 100 });
-        await page.keyboard.press('Enter');
-
-        try {
-            log(taskId, "Chờ nút 'Confirm' trong 15 giây...");
-            await page.waitForSelector('#confirm', { timeout: 15000 });
-            await page.click('#confirm');
-            log(taskId, "Đã click nút 'Confirm'.");
-        } catch (error) {
-            log(taskId, "Không tìm thấy nút 'Confirm', tiếp tục.");
-        }
-
-        try {
-            log(taskId, "Chờ liên kết tùy chọn trong 15 giây...");
-            const optionalLinkSelector = '#yDmH0d > div.YS0oNc.xAuNcb > main > c-wiz.yip5uc.SSPGKf > div > div.Z6C2jc > a';
-            await page.waitForSelector(optionalLinkSelector, { timeout: 15000 });
-            await page.click(optionalLinkSelector);
-            log(taskId, "Đã click liên kết tùy chọn.");
-        } catch (error) {
-            log(taskId, "Không tìm thấy liên kết tùy chọn, tiếp tục.");
-        }
-
-        await page.waitForSelector('.YPzqGd', { visible: true });
-        log(taskId, 'Đăng nhập Google thành công.');
-        await sleep(3000);
 
         // --- 5. Đăng ký tài khoản 11labs ---
         log(taskId, 'Bắt đầu đăng ký ElevenLabs...');
-        await page.goto('https://elevenlabs.io/app/sign-in', { waitUntil: 'networkidle2' });
+        await page.goto('https://elevenlabs.io/app/sign-up/', { waitUntil: 'networkidle2' });
 
+        await sleep(5000)
+        // await page.waitForSelector('input[type="email"]');
+        await page.type('input[type="email"]', email, { delay: 80 });
+        await page.type('input[type="password"]', password, { delay: 80 });
+        // await page.waitForSelector('button[data-loading="false"]');
+        await sleep(5000)
+        await page.click('button[data-loading="false"]');
+        await page.waitForFunction(() => document.querySelector('input[type="email"]').disabled, { timeout: 30000 });
         await sleep(10000);
 
-        const googleSignInButtonSelector = "#app-root div:nth-child(1) > button";
-        await page.waitForSelector(googleSignInButtonSelector);
+        const verifyUrl = await waitForVerifyLink(token, tm);
+        log(taskId, `Link verify: ${verifyUrl}`);
 
-        const [popup] = await Promise.all([
-            new Promise(resolve => browser.once('targetcreated', target => resolve(target.page()))),
-            humanLikeClick(page, googleSignInButtonSelector)
-        ]);
-        if (popup) await popup.waitForNavigation({ waitUntil: 'networkidle0', timeout: 300000 });
-        await sleep(5000)
-        log(taskId, 'Cửa sổ đăng nhập Google đã hiện ra.');
-        await popup.setViewport({ width: 1280, height: 800 });
+        await page.goto(verifyUrl, { waitUntil: 'networkidle2' });
+        await page.waitForSelector('button[data-loading="false"]');
+        await sleep(3000)
+        await page.click('button[data-loading="false"]');
+        await sleep(3000);
+        await page.focus('input[type="password"]');
+        await sleep(4000);
+        await page.keyboard.press('Enter');
 
-        const firstAccountSelector = `div[data-identifier="${email}"]`;
-
-        await popup.waitForSelector(firstAccountSelector, { visible: true });
-        await sleep(2000);
-        await humanLikeClick(popup, firstAccountSelector)
-        log(taskId, 'Đã chọn tài khoản Google.');
-
-        const continueButtonSelector = '#yDmH0d > c-wiz > main > div.JYXaTc.F8PBrb > div > div > div:nth-child(2) > div > div > button';
-        await popup.waitForSelector(continueButtonSelector, { visible: true });
-        await sleep(5000);
-        await humanLikeClick(popup, continueButtonSelector)
-        log(taskId, 'Đã nhấn Tiếp tục.');
 
         log(taskId, 'Chờ chuyển hướng về trang Onboarding...');
         await page.waitForFunction('window.location.href.includes("elevenlabs.io/app/onboarding")', { timeout: 60000 });
@@ -328,6 +336,7 @@ async function runAutomationProcess(taskId, proxyObj) {
         return true; // Trả về true khi thành công
 
     } catch (error) {
+        console.log(error)
         console.error(`[Tác vụ ${taskId}] GẶP LỖI: ${error.message}`);
         return false;
     } finally {
