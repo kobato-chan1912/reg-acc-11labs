@@ -5,6 +5,7 @@ const pLimit = require('p-limit'); // Giữ nguyên phiên bản 3
 const readline = require('readline');
 require('dotenv').config();
 const { faker } = require('@faker-js/faker');
+const cheerio = require('cheerio');
 
 async function buyNewMail() {
     const apiKey = process.env.DONGVAN_API_KEY;
@@ -24,35 +25,29 @@ async function buyNewMail() {
 
 async function waitForVerifyLinkDongVan(email, refresh_token, client_id, timeoutMs = 60000) {
     const start = Date.now();
-    const url = "https://api.dongvanfb.net/api/getOauth2";
+    const url = "https://tools.dongvanfb.net/api/get_messages_oauth2";
 
     while (Date.now() - start < timeoutMs) {
         try {
-            const resp = await axios.post(url, {
-                email,
-                refresh_token,
-                client_id
-            }, { timeout: 20000 });
-
+            const resp = await axios.post(url, { email, refresh_token, client_id }, { timeout: 20000 });
             const mails = resp.data?.messages || [];
-            if (mails.length > 0) {
-                for (const mail of mails) {
-                    if (mail.subject?.includes("Verify your email for ElevenLabs")) {
-                        const body = mail.message || "";
-                        const match = body.match(/https:\/\/elevenlabs\.io\/app\/action\?mode=verifyEmail[^\s'"]+/);
-                        if (match) return match[0];
-                    }
+
+            for (const mail of mails) {
+                if (mail.subject?.includes("Verify your email for ElevenLabs")) {
+                    const html = mail.message || "";
+                    const $ = cheerio.load(html);
+                    const verifyLink = $('a[href*="mode=verifyEmail"]').attr('href');
+                    if (verifyLink) return verifyLink;
                 }
             }
         } catch (e) {
             console.error("Lỗi khi đọc mail:", e.message);
         }
-
         await sleep(5000);
     }
-
     throw new Error('Không nhận được mail verify trong thời gian chờ.');
 }
+
 
 
 function generateStrongPassword(length = 12) {
@@ -171,18 +166,8 @@ async function fetchProxiesList(proxiesUrl) {
     const text = String(res.data || '');
     const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
     const proxies = lines.map((line, idx) => {
-        // format expected: host:port:user:pass:APIKEY
-        const parts = line.split(':');
-        if (parts.length < 5) {
-            throw new Error(`Dòng proxy #${idx + 1} không hợp lệ: ${line}`);
-        }
-        // last part (APIKEY) có thể chứa ":" nếu lạ, nên join phần dư
-        const host = parts[0];
-        const port = parts[1];
-        const user = parts[2];
-        const pass = parts[3];
-        const apiKey = parts.slice(4).join(':');
-        return { host, port, user, pass, apiKey, rawLine: line };
+    
+        return { rawLine: line };
     });
     return proxies;
 }
@@ -196,20 +181,23 @@ async function runAutomationProcess(taskId, proxyObj) {
 
     try {
         // --- 1. Log proxy đang dùng (ẩn bớt APIKEY khi log) ---
-        const proxyLog = `${proxyObj.host}:${proxyObj.port}:${proxyObj.user}:**** (APIKEY hidden)`;
-        log(taskId, `Sử dụng proxy: ${proxyLog}`);
+        log(taskId, `Sử dụng API KEY: ${proxyObj.rawLine}`);
 
         // --- 2. Gọi API đổi IP (proxy provider) trước khi mở profile ---
-        if (proxyObj.apiKey) {
+        let changeResp = 1234;
+        if (proxyObj.rawLine) {
             try {
-                const changeIpUrl = `https://proxygame.vn/api/proxy-rotating/change-ip/${encodeURIComponent(proxyObj.apiKey)}`;
+                const changeIpUrl = `https://7proxy.net/api/client/proxy/available?proxy_key=${encodeURIComponent(proxyObj.rawLine)}`;
                 log(taskId, `Gọi đổi IP: ${changeIpUrl}`);
-                const changeResp = await axios.get(changeIpUrl, { timeout: 20000 });
+                changeResp = await axios.get(changeIpUrl, { timeout: 20000 });
                 // Log toàn bộ response.data để debug (như yêu cầu)
                 log(taskId, `Response đổi IP: ${JSON.stringify(changeResp.data)}`);
             } catch (err) {
-                log(taskId, `WARNING: Gọi đổi IP thất bại: ${err.message}`);
+                log(taskId, `WARNING: Gọi đổi IP thất bại: ${err.message}. Đợi 15 giây trước khi chạy lại...`);
                 // Không dừng ngay — tùy bạn muốn strict thì throw ở đây
+                await sleep(15000);
+                // dừng tại đây
+                throw new Error('Dừng tác vụ do lỗi đổi IP.');
 
             }
         } else {
@@ -217,8 +205,8 @@ async function runAutomationProcess(taskId, proxyObj) {
         }
 
         // --- 3. Tạo profile GPM (raw_proxy không chứa APIKEY) ---
-        const rawProxyForGPM = `${proxyObj.host}:${proxyObj.port}:${proxyObj.user}:${proxyObj.pass}`;
-        log(taskId, `Tạo profile GPM với raw_proxy (không có APIKEY): ${rawProxyForGPM}`);
+        const rawProxyForGPM = `${changeResp.data.proxy}`;
+        log(taskId, `Tạo profile GPM với raw_proxy: ${rawProxyForGPM}`);
 
         const createProfileResponse = await axios.post(`${GPM_API_URL}/profiles/create`, {
             raw_proxy: rawProxyForGPM,
@@ -258,7 +246,7 @@ async function runAutomationProcess(taskId, proxyObj) {
 
         const mailData = await buyNewMail();
         const email = mailData.email;
-        const password = mailData.password;
+        const password = generateStrongPassword(12);
 
         log(taskId, `Mail: ${email}`);
 
@@ -454,9 +442,7 @@ async function main() {
     }
 
 
-    white(true)
-
-    {
+    while (true) {
         console.log(`\n▶️ Bắt đầu chạy với ${numThreads} luồng để đăng ký tổng cộng ${totalAccounts} tài khoản...`);
 
         // Dùng stack làm pool proxy (pop để cấp, push để trả lại)
@@ -477,7 +463,9 @@ async function main() {
                     throw new Error('No available proxy to assign for this task.');
                 }
                 const proxyObj = availableProxies.pop();
-                log(currentAttemptId, `Được cấp proxy: ${proxyObj.host}:${proxyObj.port} (pool còn ${availableProxies.length})`);
+
+                
+                log(currentAttemptId, `Được cấp proxy: ${proxyObj.rawLine} (pool còn ${availableProxies.length})`);
 
                 try {
                     const success = await runAutomationProcess(currentAttemptId, proxyObj);
