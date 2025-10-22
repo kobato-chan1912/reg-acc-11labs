@@ -5,28 +5,76 @@ const pLimit = require('p-limit'); // Giữ nguyên phiên bản 3
 const readline = require('readline');
 require('dotenv').config();
 const { faker } = require('@faker-js/faker');
-const { TempMail } = require('tempmail.lol');
+
+async function buyNewMail() {
+    const apiKey = process.env.DONGVAN_API_KEY;
+    const url = `https://api.dongvanfb.net/user/buy?apikey=${apiKey}&account_type=1&quality=1&type=full`;
+    const res = await axios.get(url, { timeout: 20000 });
+
+    if (!res.data || !res.data.status || !res.data.data || !res.data.data.list_data?.length) {
+        throw new Error(`Không thể mua mail: ${JSON.stringify(res.data)}`);
+    }
+
+    // Dạng: email|password|refresh_token|client_id
+    const parts = res.data.data.list_data[0].split('|');
+    const [email, password, refresh_token, client_id] = parts;
+    return { email, password, refresh_token, client_id };
+}
+
+
+async function waitForVerifyLinkDongVan(email, refresh_token, client_id, timeoutMs = 60000) {
+    const start = Date.now();
+    const url = "https://api.dongvanfb.net/api/getOauth2";
+
+    while (Date.now() - start < timeoutMs) {
+        try {
+            const resp = await axios.post(url, {
+                email,
+                refresh_token,
+                client_id
+            }, { timeout: 20000 });
+
+            const mails = resp.data?.messages || [];
+            if (mails.length > 0) {
+                for (const mail of mails) {
+                    if (mail.subject?.includes("Verify your email for ElevenLabs")) {
+                        const body = mail.message || "";
+                        const match = body.match(/https:\/\/elevenlabs\.io\/app\/action\?mode=verifyEmail[^\s'"]+/);
+                        if (match) return match[0];
+                    }
+                }
+            }
+        } catch (e) {
+            console.error("Lỗi khi đọc mail:", e.message);
+        }
+
+        await sleep(5000);
+    }
+
+    throw new Error('Không nhận được mail verify trong thời gian chờ.');
+}
+
 
 function generateStrongPassword(length = 12) {
-  const upper = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-  const lower = "abcdefghijklmnopqrstuvwxyz";
-  const numbers = "0123456789";
-  const specials = "!@#$%^&*";
-  const all = upper + lower + numbers + specials;
+    const upper = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    const lower = "abcdefghijklmnopqrstuvwxyz";
+    const numbers = "0123456789";
+    const specials = "!@#$%^&*";
+    const all = upper + lower + numbers + specials;
 
-  let password = "";
-  password += upper[Math.floor(Math.random() * upper.length)];
-  password += lower[Math.floor(Math.random() * lower.length)];
-  password += numbers[Math.floor(Math.random() * numbers.length)];
-  password += specials[Math.floor(Math.random() * specials.length)];
+    let password = "";
+    password += upper[Math.floor(Math.random() * upper.length)];
+    password += lower[Math.floor(Math.random() * lower.length)];
+    password += numbers[Math.floor(Math.random() * numbers.length)];
+    password += specials[Math.floor(Math.random() * specials.length)];
 
-  // Điền phần còn lại ngẫu nhiên
-  for (let i = password.length; i < length; i++) {
-    password += all[Math.floor(Math.random() * all.length)];
-  }
+    // Điền phần còn lại ngẫu nhiên
+    for (let i = password.length; i < length; i++) {
+        password += all[Math.floor(Math.random() * all.length)];
+    }
 
-  // Trộn ngẫu nhiên
-  return password.split('').sort(() => Math.random() - 0.5).join('');
+    // Trộn ngẫu nhiên
+    return password.split('').sort(() => Math.random() - 0.5).join('');
 }
 
 
@@ -36,7 +84,7 @@ async function createTempMail() {
     return { address: inbox.address, token: inbox.token, tm };
 }
 
-async function waitForVerifyLink(token, tm, timeoutMs = 120000) {
+async function waitForVerifyLink(token, tm, timeoutMs = 30000) {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
         const emails = await tm.checkInbox(token);
@@ -154,7 +202,7 @@ async function runAutomationProcess(taskId, proxyObj) {
         // --- 2. Gọi API đổi IP (proxy provider) trước khi mở profile ---
         if (proxyObj.apiKey) {
             try {
-                const changeIpUrl = `https://proxyandanh.com/api/v1/proxy/change-ip?apiKey=${encodeURIComponent(proxyObj.apiKey)}`;
+                const changeIpUrl = `https://proxygame.vn/api/proxy-rotating/change-ip/${encodeURIComponent(proxyObj.apiKey)}`;
                 log(taskId, `Gọi đổi IP: ${changeIpUrl}`);
                 const changeResp = await axios.get(changeIpUrl, { timeout: 20000 });
                 // Log toàn bộ response.data để debug (như yêu cầu)
@@ -208,18 +256,19 @@ async function runAutomationProcess(taskId, proxyObj) {
         // --- Các bước đăng nhập Google / register ElevenLabs giống cũ ---
         // --- 4. Đăng nhập Email ---
 
-        const { address: email, token, tm } = await createTempMail();
-        const password = generateStrongPassword(12);
+        const mailData = await buyNewMail();
+        const email = mailData.email;
+        const password = mailData.password;
 
         log(taskId, `Mail: ${email}`);
-        log(taskId, `Password: ${password}`);
+
 
 
         // --- 5. Đăng ký tài khoản 11labs ---
         log(taskId, 'Bắt đầu đăng ký ElevenLabs...');
         await page.goto('https://elevenlabs.io/app/sign-up/', { waitUntil: 'networkidle2' });
 
-        await sleep(5000)
+        await sleep(20000)
         // await page.waitForSelector('input[type="email"]');
         await page.type('input[type="email"]', email, { delay: 80 });
         await page.type('input[type="password"]', password, { delay: 80 });
@@ -229,7 +278,12 @@ async function runAutomationProcess(taskId, proxyObj) {
         await page.waitForFunction(() => document.querySelector('input[type="email"]').disabled, { timeout: 30000 });
         await sleep(10000);
 
-        const verifyUrl = await waitForVerifyLink(token, tm);
+        const verifyUrl = await waitForVerifyLinkDongVan(
+            mailData.email,
+            mailData.refresh_token,
+            mailData.client_id
+        );
+
         log(taskId, `Link verify: ${verifyUrl}`);
 
         await page.goto(verifyUrl, { waitUntil: 'networkidle2' });
@@ -317,9 +371,9 @@ async function runAutomationProcess(taskId, proxyObj) {
 
         const reloadCreateButtons = await page.$$('button[data-loading=false]');
         await reloadCreateButtons[reloadCreateButtons.length - 1].click();
+        await sleep(3000)
 
         const apiKeyInputSelector = "div[role=dialog] input";
-        await sleep(3000)
         await page.waitForSelector(apiKeyInputSelector);
         const apiKey = await page.$eval(apiKeyInputSelector, el => el.value);
 
@@ -336,7 +390,6 @@ async function runAutomationProcess(taskId, proxyObj) {
         return true; // Trả về true khi thành công
 
     } catch (error) {
-        console.log(error)
         console.error(`[Tác vụ ${taskId}] GẶP LỖI: ${error.message}`);
         return false;
     } finally {
@@ -394,62 +447,71 @@ async function main() {
         console.error('Lỗi khi tải/parsing proxies:', err.message);
         return;
     }
-
     console.log(`Tổng proxy lấy được: ${proxies.length}`);
     if (numThreads > proxies.length) {
         console.error(`ERROR: Số luồng (${numThreads}) lớn hơn số proxy có sẵn (${proxies.length}). Không thể chạy.`);
         return;
     }
 
-    console.log(`\n▶️ Bắt đầu chạy với ${numThreads} luồng để đăng ký tổng cộng ${totalAccounts} tài khoản...`);
 
-    // Dùng stack làm pool proxy (pop để cấp, push để trả lại)
-    const availableProxies = proxies.slice(); // clone
+    white(true)
 
-    const limit = pLimit(numThreads);
-    let successfulRegs = 0;
-    let attemptCount = 0;
+    {
+        console.log(`\n▶️ Bắt đầu chạy với ${numThreads} luồng để đăng ký tổng cộng ${totalAccounts} tài khoản...`);
 
-    const jobPromises = Array.from({ length: totalAccounts }).map(() =>
-        limit(async function registerAttempt() {
-            attemptCount++;
-            const currentAttemptId = attemptCount;
+        // Dùng stack làm pool proxy (pop để cấp, push để trả lại)
+        const availableProxies = proxies.slice(); // clone
 
-            // LẤY proxy từ pool (synchronous - JS single thread nên an toàn)
-            if (availableProxies.length === 0) {
-                // (không xảy ra do pLimit + kiểm tra numThreads <= proxies.length) nhưng phòng hờ:
-                throw new Error('No available proxy to assign for this task.');
-            }
-            const proxyObj = availableProxies.pop();
-            log(currentAttemptId, `Được cấp proxy: ${proxyObj.host}:${proxyObj.port} (pool còn ${availableProxies.length})`);
+        const limit = pLimit(numThreads);
+        let successfulRegs = 0;
+        let attemptCount = 0;
 
-            try {
-                const success = await runAutomationProcess(currentAttemptId, proxyObj);
+        const jobPromises = Array.from({ length: totalAccounts }).map(() =>
+            limit(async function registerAttempt() {
+                attemptCount++;
+                const currentAttemptId = attemptCount;
 
-                if (success) {
-                    successfulRegs++;
-                    console.log(`\n✅ TIẾN ĐỘ: Đã đăng ký thành công ${successfulRegs} / ${totalAccounts} tài khoản.\n`);
-                    return true;
-                } else {
-                    console.log(`\n❌ THẤT BẠI: Lần thử #${currentAttemptId} thất bại. Sẽ thử lại với tác vụ mới.\n`);
-                    // retry: trả proxy về pool trước khi gọi lại
-                    availableProxies.push(proxyObj);
-                    return registerAttempt(); // will re-acquire a proxy when it runs next
+                // LẤY proxy từ pool (synchronous - JS single thread nên an toàn)
+                if (availableProxies.length === 0) {
+                    // (không xảy ra do pLimit + kiểm tra numThreads <= proxies.length) nhưng phòng hờ:
+                    throw new Error('No available proxy to assign for this task.');
                 }
-            } finally {
-                // Sau khi tác vụ hoàn thành (thành công/ thất bại), trả proxy về pool để luồng khác dùng tiếp
-                if (!availableProxies.includes(proxyObj)) {
-                    availableProxies.push(proxyObj);
+                const proxyObj = availableProxies.pop();
+                log(currentAttemptId, `Được cấp proxy: ${proxyObj.host}:${proxyObj.port} (pool còn ${availableProxies.length})`);
+
+                try {
+                    const success = await runAutomationProcess(currentAttemptId, proxyObj);
+
+                    if (success) {
+                        successfulRegs++;
+                        console.log(`\n✅ TIẾN ĐỘ: Đã đăng ký thành công ${successfulRegs} / ${totalAccounts} tài khoản.\n`);
+                        return true;
+                    } else {
+                        console.log(`\n❌ THẤT BẠI: Lần thử #${currentAttemptId} thất bại. Sẽ thử lại với tác vụ mới.\n`);
+                        // retry: trả proxy về pool trước khi gọi lại
+                        availableProxies.push(proxyObj);
+                        return registerAttempt(); // will re-acquire a proxy when it runs next
+                    }
+                } finally {
+                    // Sau khi tác vụ hoàn thành (thành công/ thất bại), trả proxy về pool để luồng khác dùng tiếp
+                    if (!availableProxies.includes(proxyObj)) {
+                        availableProxies.push(proxyObj);
+                    }
+                    log(currentAttemptId, `Trả lại proxy vào pool. Pool hiện có ${availableProxies.length} proxy.`);
                 }
-                log(currentAttemptId, `Trả lại proxy vào pool. Pool hiện có ${availableProxies.length} proxy.`);
-            }
-        })
-    );
+            })
+        );
 
-    // Chờ tất cả các công việc hoàn thành
-    await Promise.all(jobPromises);
+        // Chờ tất cả các công việc hoàn thành
+        await Promise.all(jobPromises);
 
-    console.log(`\n🎉 HOÀN TẤT! Đã đăng ký thành công ${totalAccounts} tài khoản.`);
+        console.log(`\n🎉 HOÀN TẤT! Đã đăng ký thành công ${totalAccounts} tài khoản.`);
+        console.log(`⏸ Nghỉ 6 tiếng trước khi chạy lại...\n`);
+        await sleep(6 * 60 * 60 * 1000); // 6 tiếng
+
+    }
+
+
 }
 
 main().catch(err => {
