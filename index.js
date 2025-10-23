@@ -48,6 +48,48 @@ async function waitForVerifyLinkDongVan(email, refresh_token, client_id, timeout
     throw new Error('Không nhận được mail verify trong thời gian chờ.');
 }
 
+// Thêm hàm chờ captcha được giải
+async function waitForCaptchaSolved(page, checkInterval = 20000, timeout = 180000) {
+    const start = Date.now();
+
+    while (Date.now() - start < timeout) {
+        const isHidden = await page.evaluate(() => {
+            // lấy tất cả iframe hCaptcha
+            const iframes = document.querySelectorAll('iframe[src*="hcaptcha.com"]');
+            if (!iframes.length) return false;
+
+            // lấy iframe cuối cùng (iframe hiển thị captcha thật)
+            const iframe = iframes[iframes.length - 1];
+            if (!iframe) return false;
+
+            // tìm div bao ngoài của iframe
+            let outerDiv = iframe.closest('div[style]');
+            if (!outerDiv) return false;
+
+            const style = window.getComputedStyle(outerDiv);
+            const ariaHidden = outerDiv.getAttribute('aria-hidden');
+
+            // khi captcha được giải xong: visibility: hidden hoặc aria-hidden: true
+            const hiddenNow =
+                ariaHidden === 'true' ||
+                style.visibility === 'hidden' ||
+                style.display === 'none' ||
+                parseFloat(style.opacity || '1') === 0;
+
+            return hiddenNow;
+        });
+
+        if (isHidden) {
+            console.log('✅ Captcha đã được giải (div bao ngoài visibility:hidden).');
+            return true;
+        }
+
+        console.log('⏳ Captcha vẫn còn hiển thị — đợi thêm ...');
+        await sleep(checkInterval);
+    }
+
+    throw new Error('❌ Timeout: Captcha vẫn chưa ẩn sau thời gian chờ.');
+}
 
 
 function generateStrongPassword(length = 12) {
@@ -146,12 +188,12 @@ function getFixedWindowPosition(threadId) {
     // Mỗi cửa sổ có kích thước tương đối cố định (ví dụ 400x300)
     // Giả định màn hình khoảng 1920x1080 — bạn có thể chỉnh cho phù hợp
     const positions = [
-        "200,400",       // Luồng 1: góc trên bên trái
-        "500,0",     // Luồng 2: bên phải 1 chút
-        "1000,0",    // Luồng 3: trên bên phải
-        "0,400",     // Luồng 4: hàng dưới
-        "500,400",   // Luồng 5: giữa hàng dưới
-        "1000,400",  // Luồng 6: phải hàng dưới
+        "0,0",       // Luồng 1: góc trên bên trái
+        "1800,0",     // Luồng 2: bên phải 1 chút
+        "3600,0",    // Luồng 3: trên bên phải
+        "5400,0",     // Luồng 4: hàng dưới
+        "0,1800",   // Luồng 5: giữa hàng dưới
+        "0,3600",  // Luồng 6: phải hàng dưới
     ];
 
     // Nếu luồng vượt quá số vị trí định sẵn thì lặp lại (hoặc bạn có thể throw lỗi)
@@ -166,7 +208,7 @@ async function fetchProxiesList(proxiesUrl) {
     const text = String(res.data || '');
     const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
     const proxies = lines.map((line, idx) => {
-    
+
         return { rawLine: line };
     });
     return proxies;
@@ -223,8 +265,7 @@ async function runAutomationProcess(taskId, proxyObj) {
         // --- 4. Start profile và connect puppeteer ---
         const win_pos = getFixedWindowPosition(taskId);
         log(taskId, `Khởi động profile GPM, win_pos=${win_pos} ...`);
-        const startResponse = await axios.get(`${GPM_API_URL}/profiles/start/${profileId}?win_pos=${win_pos}`, { timeout: 30000 });
-
+        const startResponse = await axios.get(`${GPM_API_URL}/profiles/start/${profileId}?win_pos=${win_pos}&win_scale=0.2&win_size=1920,1080`, { timeout: 30000 });
         if (!startResponse.data || !startResponse.data.success) {
             throw new Error(`Không thể mở profile: ${JSON.stringify(startResponse.data)}`);
         }
@@ -244,25 +285,29 @@ async function runAutomationProcess(taskId, proxyObj) {
         // --- Các bước đăng nhập Google / register ElevenLabs giống cũ ---
         // --- 4. Đăng nhập Email ---
 
-        const mailData = await buyNewMail();
-        const email = mailData.email;
-        const password = generateStrongPassword(12);
 
-        log(taskId, `Mail: ${email}`);
 
 
 
         // --- 5. Đăng ký tài khoản 11labs ---
         log(taskId, 'Bắt đầu đăng ký ElevenLabs...');
+        await sleep(5000);
         await page.goto('https://elevenlabs.io/app/sign-up/', { waitUntil: 'networkidle2' });
+        await sleep(5000)
+        await waitForCaptchaSolved(page, 5000, 90000);
+        const mailData = await buyNewMail();
+        const email = mailData.email;
+        const password = generateStrongPassword(12);
 
-        await sleep(20000)
+        log(taskId, `Mail: ${email}`);
         // await page.waitForSelector('input[type="email"]');
-        await page.type('input[type="email"]', email, { delay: 80 });
-        await page.type('input[type="password"]', password, { delay: 80 });
+        await page.type('input[type="email"]', email, { delay: 120 });
+        await page.type('input[type="password"]', password, { delay: 120 });
         // await page.waitForSelector('button[data-loading="false"]');
         await sleep(5000)
-        await page.click('button[data-loading="false"]');
+        await page.focus('input[type="password"]');
+        await sleep(4000);
+        await page.keyboard.press('Enter');
         await page.waitForFunction(() => document.querySelector('input[type="email"]').disabled, { timeout: 30000 });
         await sleep(10000);
 
@@ -464,7 +509,7 @@ async function main() {
                 }
                 const proxyObj = availableProxies.pop();
 
-                
+
                 log(currentAttemptId, `Được cấp proxy: ${proxyObj.rawLine} (pool còn ${availableProxies.length})`);
 
                 try {
