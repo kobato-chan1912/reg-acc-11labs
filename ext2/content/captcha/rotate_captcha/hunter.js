@@ -1,0 +1,1 @@
+setInterval(function(){var t,a,e;window.registerCaptchaWidget&&!isCaptchaWidgetRegistered("rotate_captcha",0)&&(t=a=null,e=document.querySelector(".axie-captcha-image"))&&e.src&&(t=e.src,a=e.parentElement,(e={}).main=t,a.id||(a.id="rotate_captcha-container-"+Date.now()),e.captchaType="rotate_captcha",e.widgetId=0,e.containerId=a.id,e.callback=null,registerCaptchaWidget(e))},500);

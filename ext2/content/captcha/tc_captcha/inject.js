@@ -1,0 +1,1 @@
+window.addEventListener("message",t=>{var a=t.data;if("childRequest"===a.type&&a.requestId){var s=document.querySelector("#tcaptcha_transform_dy");let e=!0;s&&"0"!==s.style.opacity&&""!==s.style.opacity||(e=!1),t.source.postMessage({type:"parentResponse",requestId:a.requestId,payload:{data:e}},t.origin)}});

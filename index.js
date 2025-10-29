@@ -218,6 +218,13 @@ async function fetchProxiesList(proxiesUrl) {
 // bây giờ nhận proxyObj làm tham số
 async function runAutomationProcess(taskId, proxyObj) {
     log(taskId, 'Bắt đầu...');
+    const regReq = await fetch('https://11labs.toolsetting.cfd/reg-status.php');
+    const data = await regReq.json();
+    if (!data.need_reg) {
+        log(taskId, 'Không cần reg, nghỉ 2 phút...');
+        await sleep(2 * 60 * 1000);
+        throw new Error('Không cần thực thi.');
+    }
     let browser = null;
     let profileId = null;
 
@@ -294,7 +301,7 @@ async function runAutomationProcess(taskId, proxyObj) {
         await sleep(5000);
         await page.goto('https://elevenlabs.io/app/sign-up/', { waitUntil: 'networkidle2' });
         await sleep(5000)
-        await waitForCaptchaSolved(page, 5000, 90000);
+        await waitForCaptchaSolved(page, 5000, 360000);
         const mailData = await buyNewMail();
         const email = mailData.email;
         const password = generateStrongPassword(12);
@@ -488,61 +495,36 @@ async function main() {
 
 
     while (true) {
-        console.log(`\n▶️ Bắt đầu chạy với ${numThreads} luồng để đăng ký tổng cộng ${totalAccounts} tài khoản...`);
+        console.log(`\n▶️ Bắt đầu chạy ${numThreads} luồng cố định...`);
 
-        // Dùng stack làm pool proxy (pop để cấp, push để trả lại)
-        const availableProxies = proxies.slice(); // clone
+        // Giới hạn chạy đúng 5 luồng (hoặc ít hơn nếu proxy ít)
+        const threadsToRun = Math.min(numThreads, proxies.length, 5);
 
-        const limit = pLimit(numThreads);
-        let successfulRegs = 0;
-        let attemptCount = 0;
+        const fixedThreads = [];
+        for (let i = 0; i < threadsToRun; i++) {
+            const proxyObj = proxies[i]; // proxy cố định cho luồng i
+            const threadId = i + 1;
 
-        const jobPromises = Array.from({ length: totalAccounts }).map(() =>
-            limit(async function registerAttempt() {
-                attemptCount++;
-                const currentAttemptId = attemptCount;
-
-                // LẤY proxy từ pool (synchronous - JS single thread nên an toàn)
-                if (availableProxies.length === 0) {
-                    // (không xảy ra do pLimit + kiểm tra numThreads <= proxies.length) nhưng phòng hờ:
-                    throw new Error('No available proxy to assign for this task.');
-                }
-                const proxyObj = availableProxies.pop();
-
-
-                log(currentAttemptId, `Được cấp proxy: ${proxyObj.rawLine} (pool còn ${availableProxies.length})`);
-
-                try {
-                    const success = await runAutomationProcess(currentAttemptId, proxyObj);
-
-                    if (success) {
-                        successfulRegs++;
-                        console.log(`\n✅ TIẾN ĐỘ: Đã đăng ký thành công ${successfulRegs} / ${totalAccounts} tài khoản.\n`);
-                        return true;
-                    } else {
-                        console.log(`\n❌ THẤT BẠI: Lần thử #${currentAttemptId} thất bại. Sẽ thử lại với tác vụ mới.\n`);
-                        // retry: trả proxy về pool trước khi gọi lại
-                        availableProxies.push(proxyObj);
-                        return registerAttempt(); // will re-acquire a proxy when it runs next
+            fixedThreads.push(
+                (async () => {
+                    while (true) {
+                        const success = await runAutomationProcess(threadId, proxyObj);
+                        if (success) {
+                            console.log(`✅ [Luồng ${threadId}] Hoàn tấ.`);
+                        } else {
+                            console.log(`❌ [Luồng ${threadId}] Thất bại.`);
+                        }
                     }
-                } finally {
-                    // Sau khi tác vụ hoàn thành (thành công/ thất bại), trả proxy về pool để luồng khác dùng tiếp
-                    if (!availableProxies.includes(proxyObj)) {
-                        availableProxies.push(proxyObj);
-                    }
-                    log(currentAttemptId, `Trả lại proxy vào pool. Pool hiện có ${availableProxies.length} proxy.`);
-                }
-            })
-        );
+                })()
+            );
+        }
 
-        // Chờ tất cả các công việc hoàn thành
-        await Promise.all(jobPromises);
+        await Promise.all(fixedThreads);
 
-        console.log(`\n🎉 HOÀN TẤT! Đã đăng ký thành công ${totalAccounts} tài khoản.`);
-        console.log(`⏸ Nghỉ 6 tiếng trước khi chạy lại...\n`);
-        await sleep(6 * 60 * 60 * 1000); // 6 tiếng
-
+        console.log(`\n🎉 Tất cả ${threadsToRun} luồng đã hoàn thành. Nghỉ 6 tiếng trước khi chạy lại...\n`);
+        await sleep(6 * 60 * 60 * 1000);
     }
+
 
 
 }

@@ -1,0 +1,1 @@
+setInterval(function(){if(window.registerCaptchaWidget&&!isCaptchaWidgetRegistered("tele_text",0)){var a=document.querySelector(".popupCanvasHolder canvas");let e=null,t=null;a&&(t=a.toDataURL(),e=a.parentElement,(a={}).main=t,e.id||(e.id="tele_text-container-"+Date.now()),a.captchaType="tele_text",a.widgetId=0,a.containerId=e.id,a.callback=null,registerCaptchaWidget(a))}},500);

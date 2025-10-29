@@ -1,0 +1,1 @@
+async function getConfig(){return new Promise(function(e){try{chrome.runtime.sendMessage({name:"popup",action:"getConfig"},function(n){e(n.response)})}catch(n){e(null)}})}async function setConfig(n,t){return new Promise(function(e){try{chrome.runtime.sendMessage({name:"popup",action:"setConfig",key:n,value:t},e)}catch(n){e(null)}})}
